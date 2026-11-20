@@ -194,7 +194,9 @@ jobs:
           # install-release 需要完整 release 目录；lineage tar.gz 解压出的顶层即 release
           LDIR=$(find .build/android/inputs/lineage -mindepth 1 -maxdepth 1 -type d | head -1)
           echo "lineage release dir: $LDIR"
-          python3 android/lineage-24/tools/install-release.py --source "$LDIR"
+          ABS_LDIR="$(cd "$LDIR" && pwd)"
+          echo "absolute lineage dir: $ABS_LDIR"
+          python3 android/lineage-24/tools/install-release.py --source "$ABS_LDIR"
           echo "staged releases:"; find .build/android/releases -maxdepth 2 -type f | head
 
       - name: Build Kernarium runtime (ios-device-android)
