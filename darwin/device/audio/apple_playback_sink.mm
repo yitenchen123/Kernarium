@@ -342,44 +342,76 @@ public:
                       if (const auto flags = weakNotifications.lock())
                           flags->signal(flags->configurationChanged);
                     }];
-        /* iOS 27 replaces the interruption notification with two: the session
-         * becoming inactive, which also reports the app's own deactivations,
-         * and the system's resumption recommendation. An interruption is a
-         * deactivation that carries an interruption context. Every
-         * recommendation ends the interruption; whether the sink takes the
-         * session back at once depends on its advice (see endInterruption). */
-        deactivationObserver_ = [[NSNotificationCenter defaultCenter]
-            addObserverForName:AVAudioSessionDidBecomeInactiveNotification
-                        object:[AVAudioSession sharedInstance]
-                         queue:nil
-                    usingBlock:^(NSNotification* notification) {
-                      const auto flags = weakNotifications.lock();
-                      if (!flags)
-                          return;
-                      const AVAudioSessionDeactivationContext* context =
-                          notification.userInfo[
-                              AVAudioSessionDeactivationContextKey];
-                      if (context.interruptionContext != nil)
-                          flags->signal(flags->interruptionBegan);
-                    }];
-        resumptionObserver_ = [[NSNotificationCenter defaultCenter]
-            addObserverForName:AVAudioSessionResumptionRecommendationNotification
-                        object:[AVAudioSession sharedInstance]
-                         queue:nil
-                    usingBlock:^(NSNotification* notification) {
-                      const auto flags = weakNotifications.lock();
-                      if (!flags)
-                          return;
-                      const AVAudioSessionResumptionContext* context =
-                          notification.userInfo[
-                              AVAudioSessionResumptionContextKey];
-                      if (context.recommendation ==
-                          AVAudioSessionResumptionRecommendationShouldResume) {
-                          flags->resumeRecommended.store(
-                              true, std::memory_order_release);
-                      }
-                      flags->signal(flags->interruptionEnded);
-                    }];
+        if (@available(iOS 27.0, *)) {
+            /* iOS 27 models interruptions as two life-cycle notifications:
+             * the session becoming inactive (which also reports our own
+             * deactivations) and the system's resumption recommendation. */
+            deactivationObserver_ = [[NSNotificationCenter defaultCenter]
+                addObserverForName:AVAudioSessionDidBecomeInactiveNotification
+                            object:[AVAudioSession sharedInstance]
+                             queue:nil
+                        usingBlock:^(NSNotification* notification) {
+                          const auto flags = weakNotifications.lock();
+                          if (!flags)
+                              return;
+                          const AVAudioSessionDeactivationContext* context =
+                              notification.userInfo[
+                                  AVAudioSessionDeactivationContextKey];
+                          if (context.interruptionContext != nil)
+                              flags->signal(flags->interruptionBegan);
+                        }];
+            resumptionObserver_ = [[NSNotificationCenter defaultCenter]
+                addObserverForName:AVAudioSessionResumptionRecommendationNotification
+                            object:[AVAudioSession sharedInstance]
+                             queue:nil
+                        usingBlock:^(NSNotification* notification) {
+                          const auto flags = weakNotifications.lock();
+                          if (!flags)
+                              return;
+                          const AVAudioSessionResumptionContext* context =
+                              notification.userInfo[
+                                  AVAudioSessionResumptionContextKey];
+                          if (context.recommendation ==
+                              AVAudioSessionResumptionRecommendationShouldResume) {
+                              flags->resumeRecommended.store(
+                                  true, std::memory_order_release);
+                          }
+                          flags->signal(flags->interruptionEnded);
+                        }];
+        } else {
+            /* iOS 26 and earlier: the legacy interruption notification maps
+             * cleanly onto the same state machine. Began -> interruptionBegan;
+             * Ended -> interruptionEnded, with the ShouldResume option feeding
+             * resumeRecommended so endInterruption() makes the same decision. */
+            deactivationObserver_ = [[NSNotificationCenter defaultCenter]
+                addObserverForName:AVAudioSessionInterruptionNotification
+                            object:[AVAudioSession sharedInstance]
+                             queue:nil
+                        usingBlock:^(NSNotification* notification) {
+                          const auto flags = weakNotifications.lock();
+                          if (!flags)
+                              return;
+                          const NSNumber* type = notification.userInfo[
+                              AVAudioSessionInterruptionTypeKey];
+                          if (type == nil)
+                              return;
+                          if (type.unsignedIntegerValue ==
+                              AVAudioSessionInterruptionTypeBegan) {
+                              flags->signal(flags->interruptionBegan);
+                          } else if (type.unsignedIntegerValue ==
+                                     AVAudioSessionInterruptionTypeEnded) {
+                              const NSNumber* options = notification.userInfo[
+                                  AVAudioSessionInterruptionOptionKey];
+                              if (options != nil &&
+                                  (options.unsignedIntegerValue &
+                                   AVAudioSessionInterruptionOptionShouldResume)) {
+                                  flags->resumeRecommended.store(
+                                      true, std::memory_order_release);
+                              }
+                              flags->signal(flags->interruptionEnded);
+                          }
+                        }];
+        }
 #endif
     }
 
