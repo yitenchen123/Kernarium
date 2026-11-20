@@ -39,6 +39,18 @@ jobs:
           ref: main
           fetch-depth: 1
 
+      - name: Cache dependency sources, git cache and build products
+        uses: actions/cache@v4
+        with:
+          path: |
+            external/sources
+            .build/dependency-cache
+            .build/dependencies
+            .build/android
+          key: kernarium-ios26-deps-${{ hashFiles('dependencies/manifest.tsv', 'dependencies/build.sh', 'dependencies/build-apple-gpu.sh', 'dependencies/build-ios-network.sh', 'cmake/toolchains/Apple.cmake', 'Andarium/Andarium.xcodeproj/project.xcproj') }}
+          restore-keys: |
+            kernarium-ios26-deps-
+
       - name: Toolchain info + homebrew deps
         run: |
           set -euxo pipefail
