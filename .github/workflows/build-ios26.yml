@@ -49,6 +49,17 @@ jobs:
           ninja --version
           python3 --version
 
+      - name: Redirect unreachable GNU savannah sources to GitHub mirrors
+        run: |
+          set -euxo pipefail
+          # git.savannah.gnu.org 当前整体返回 502；改用精确含同一 commit 的 GitHub 镜像。
+          # insteadOf 只换传输地址，不改变 commit hash，manifest 完整性校验照常通过。
+          git config --global url."https://github.com/coreutils/gnulib.git".insteadOf "https://git.savannah.gnu.org/git/gnulib.git"
+          git config --global url."https://github.com/GitMirroring/libiconv.git".insteadOf "https://git.savannah.gnu.org/git/libiconv.git"
+          git config --global url."https://github.com/GitMirroring/gawk.git".insteadOf "https://git.savannah.gnu.org/git/gawk.git"
+          echo "=== insteadOf rules ==="
+          git config --global --get-regexp 'url\..*\.insteadof'
+
       - name: Pin deployment target to ${{ env.MIN_IOS }} (assert)
         run: |
           set -euxo pipefail
