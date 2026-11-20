@@ -119,11 +119,17 @@ jobs:
           sed -i '' "s/^DEPLOYMENT_TARGET=[0-9.]*/DEPLOYMENT_TARGET=${MIN_IOS}/" dependencies/build.sh
           # SPM packages also declare an iOS minimum; pin those too or SwiftPM
           # modules fail with "compiling for iOS X but module has min iOS 27".
-          for PKG in Andarium/AndariumCore/Package.swift GuestHost/Core/Package.swift; do
-            test -f "$PKG"
-            sed -i '' "s/\.iOS("[0-9.]*")/.iOS(\"${MIN_IOS}\")/" "$PKG"
-            grep -n '\.iOS(' "$PKG" | head -1
-          done
+          python3 - <<'PYPIN'
+import os, re, pathlib
+v = os.environ["MIN_IOS"]
+for pkg in ("Andarium/AndariumCore/Package.swift", "GuestHost/Core/Package.swift"):
+    p = pathlib.Path(pkg)
+    s = p.read_text()
+    s2 = re.sub(r'\.iOS\("[0-9.]*"\)', '.iOS("' + v + '")', s)
+    assert s2 != s, "iOS platform not found in " + pkg
+    p.write_text(s2)
+    print(pkg, [l.strip() for l in s2.splitlines() if ".iOS(" in l][:1])
+PYPIN
           echo "deployment target lines:"
           grep -n 'IPHONEOS_DEPLOYMENT_TARGET' Andarium/Andarium.xcodeproj/project.xcproj
           grep -n '_uml_apple_deployment_target ' cmake/toolchains/Apple.cmake | head -1
