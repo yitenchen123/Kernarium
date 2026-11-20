@@ -1,0 +1,186 @@
+name: Andarium for iOS 26 (deployment target 26.0, no JIT)
+
+# 目标：把官方 Andarium 的 IPHONEOS_DEPLOYMENT_TARGET 从 27.0 降到 26.0，
+# 在 macOS 27 / Xcode 27.2 runner 上重新编译，产出可在 iOS 26.x 设备安装的
+# 未签名 IPA（签名/entitlement 由用户在本地用付费开发者账号完成）。
+#
+# 依据：
+#  - 源码里 iOS 27 的引用（UIHingeInteraction / 外置超广角相机）全部有
+#    @available(iOS 27.1, *) 保护，折叠屏专属，非折叠 iPhone 用不到；
+#  - Metal 4 自 iOS 26 起支持，A19 Pro 满足；
+#  - Kernarium 默认 iSH 风格解释器运行，不依赖 JIT。
+# 仓库侧已提交三处版本改动（工程文件 / Apple.cmake / dependencies/build.sh），
+# 这里再 sed 一道作为不变量断言。
+
+on:
+  workflow_dispatch:
+    inputs:
+      min_ios:
+        description: "deployment target (26.0 or 26.3)"
+        default: "26.0"
+      release_tag:
+        description: "Kernarium release tag for prebuilt kernel + system image"
+        default: "1.0b15-release"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-27   # macOS 27.0.1 + Xcode 27.2，能读工程 JSON (project.xcproj)
+    timeout-minutes: 360
+    env:
+      MIN_IOS: ${{ github.event.inputs.min_ios || '26.0' }}
+      REL_TAG: ${{ github.event.inputs.release_tag || '1.0b15-release' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: yitenchen123/Kernarium
+          ref: main
+          fetch-depth: 1
+
+      - name: Toolchain info + homebrew deps
+        run: |
+          set -euxo pipefail
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+          brew install ninja cmake python@3.12 2>/dev/null || true
+          cmake --version | head -1
+          ninja --version
+          python3 --version
+
+      - name: Pin deployment target to ${{ env.MIN_IOS }} (assert)
+        run: |
+          set -euxo pipefail
+          # 三处硬编码统一改成目标版本，缺任一处直接失败
+          test -f Andarium/Andarium.xcodeproj/project.xcproj
+          test -f cmake/toolchains/Apple.cmake
+          test -f dependencies/build.sh
+          sed -i '' "s/\"IPHONEOS_DEPLOYMENT_TARGET\": \"[0-9.]*\"/\"IPHONEOS_DEPLOYMENT_TARGET\": \"${MIN_IOS}\"/" Andarium/Andarium.xcodeproj/project.xcproj
+          sed -i '' "s/set(_uml_apple_deployment_target [0-9.]*)/set(_uml_apple_deployment_target ${MIN_IOS})/" cmake/toolchains/Apple.cmake
+          sed -i '' "s/^DEPLOYMENT_TARGET=[0-9.]*/DEPLOYMENT_TARGET=${MIN_IOS}/" dependencies/build.sh
+          echo "deployment target lines:"
+          grep -n 'IPHONEOS_DEPLOYMENT_TARGET' Andarium/Andarium.xcodeproj/project.xcproj
+          grep -n '_uml_apple_deployment_target ' cmake/toolchains/Apple.cmake | head -1
+          grep -n '^DEPLOYMENT_TARGET=' dependencies/build.sh | head -1
+
+      - name: Download prebuilt kernel + Android system image
+        run: |
+          set -euxo pipefail
+          mkdir -p .build/android/inputs
+          BASE="https://github.com/imxieyi/Kernarium/releases/download/${REL_TAG}"
+          curl -fL --retry 3 -o .build/android/inputs/kernel.tar.gz \
+            "${BASE}/android-6.18-arm64-4k-20261117-6.18.60-vd2.tar.gz"
+          curl -fL --retry 3 -o .build/android/inputs/lineage.tar.gz \
+            "${BASE}/lineage24-mainline6.18-4k-20261115-los24-r28.tar.gz"
+          mkdir -p .build/android/inputs/kernel .build/android/inputs/lineage
+          tar xzf .build/android/inputs/kernel.tar.gz -C .build/android/inputs/kernel
+          tar xzf .build/android/inputs/lineage.tar.gz -C .build/android/inputs/lineage
+          echo "kernel:"; find .build/android/inputs/kernel -maxdepth 2 -type f | head
+          echo "lineage:"; find .build/android/inputs/lineage -maxdepth 2 -type f | head
+
+      - name: Prepare dependency sources (network)
+        run: |
+          set -euxo pipefail
+          dependencies/prepare.sh --product all
+
+      - name: Build host (macOS arm64) static dependencies
+        run: |
+          set -uxo pipefail
+          dependencies/build.sh 2>&1 | tee /tmp/deps-host.log
+          rc=${PIPESTATUS[0]}
+          [ "$rc" -eq 0 ] || { echo "=== host deps FAILED ==="; grep -nE "error:|fatal|Error [0-9]|\*\*\*" /tmp/deps-host.log | tail -60; exit 1; }
+
+      - name: Build apple-gpu-vulkan (iOS device)
+        run: |
+          set -uxo pipefail
+          dependencies/build-apple-gpu.sh --platform ios \
+            --prefix .build/dependencies/apple-gpu-vulkan-experiment/ios-device-arm64 \
+            2>&1 | tee /tmp/deps-gpu.log
+          rc=${PIPESTATUS[0]}
+          [ "$rc" -eq 0 ] || { echo "=== gpu deps FAILED ==="; grep -nE "error:|fatal|Error [0-9]|\*\*\*" /tmp/deps-gpu.log | tail -60; exit 1; }
+
+      - name: Build ios-network dependencies
+        run: |
+          set -uxo pipefail
+          dependencies/build-ios-network.sh --platform ios \
+            --prefix .build/dependencies/ios-device-arm64/network \
+            2>&1 | tee /tmp/deps-net.log
+          rc=${PIPESTATUS[0]}
+          [ "$rc" -eq 0 ] || { echo "=== network deps FAILED ==="; grep -nE "error:|fatal|Error [0-9]|\*\*\*" /tmp/deps-net.log | tail -60; exit 1; }
+
+      - name: Stage accepted Android release
+        run: |
+          set -euxo pipefail
+          KREL=$(find .build/android/inputs/kernel -name kernel -o -name '*.tar.gz' | head -1 || true)
+          # install-release 需要完整 release 目录；lineage tar.gz 解压出的顶层即 release
+          LDIR=$(find .build/android/inputs/lineage -mindepth 1 -maxdepth 1 -type d | head -1)
+          echo "lineage release dir: $LDIR"
+          python3 android/lineage-24/tools/install-release.py --source "$LDIR"
+          echo "staged releases:"; find .build/android/releases -maxdepth 2 -type f | head
+
+      - name: Build Kernarium runtime (ios-device-android)
+        run: |
+          set -uxo pipefail
+          cmake --preset kernarium-ios-device-android 2>&1 | tee /tmp/cmake-cfg.log
+          rc=${PIPESTATUS[0]}; [ "$rc" -eq 0 ] || { grep -nE "error|Error|CMake Error" /tmp/cmake-cfg.log | tail -60; exit 1; }
+          cmake --build --preset kernarium-ios-device-android 2>&1 | tee /tmp/cmake-build.log
+          rc=${PIPESTATUS[0]}; [ "$rc" -eq 0 ] || { grep -nE "error:|fatal|Error [0-9]|\*\*\*" /tmp/cmake-build.log | tail -60; exit 1; }
+
+      - name: Package iOS frameworks + stage system image
+        run: |
+          set -uxo pipefail
+          Kernarium/scripts/package-ios-frameworks.sh --runtimes android 2>&1 | tee /tmp/pkg.log
+          rc=${PIPESTATUS[0]}; [ "$rc" -eq 0 ] || { grep -nE "error|Error|FAIL" /tmp/pkg.log | tail -60; exit 1; }
+          python3 Andarium/scripts/stage-system-image.py 2>&1 | tee /tmp/stage.log
+          rc=${PIPESTATUS[0]}; [ "$rc" -eq 0 ] || { grep -nE "error|Error|FAIL|Traceback" /tmp/stage.log | tail -60; exit 1; }
+
+      - name: xcodebuild Andarium (Release, generic iOS)
+        run: |
+          set -uxo pipefail
+          mkdir -p build
+          xcodebuild -project Andarium/Andarium.xcodeproj -scheme Andarium \
+            -configuration Release -destination 'generic/platform=iOS' \
+            CODE_SIGNING_ALLOWED=NO \
+            -derivedDataPath build/derived 2>&1 | tee /tmp/xcodebuild.log
+          rc=${PIPESTATUS[0]}; [ "$rc" -eq 0 ] || { grep -nE "error:|fatal error|Error [0-9]|\*\* ARCHIVE FAILED|LD:|Undefined" /tmp/xcodebuild.log | tail -80; exit 1; }
+          find build/derived -name 'Andarium.app' -type d | head
+
+      - name: Verify min version = target + Pack IPA (unsigned)
+        run: |
+          set -euxo pipefail
+          APP=$(find build/derived -name 'Andarium.app' -type d | head -1)
+          BIN="$APP/Andarium"
+          echo "=== LC_BUILD_VERSION minos ==="
+          vtool -show-build "$BIN" | grep -A3 'LC_BUILD_VERSION' | head -8
+          MATCH=$(vtool -show-build "$BIN" | grep -i "minos" | grep -c "${MIN_IOS}")
+          echo "minos match count: $MATCH"
+          echo "=== nested frameworks minos ==="
+          find "$APP/Frameworks" -type f -name 'KernariumRuntime' -o -name '*.framework/*' 2>/dev/null | head
+          mkdir -p Payload
+          cp -R "$APP" Payload/
+          zip -qr "Andarium-ios${MIN_IOS}-unsigned.ipa" Payload
+          ls -lh "Andarium-ios${MIN_IOS}-unsigned.ipa"
+          shasum -a 256 "Andarium-ios${MIN_IOS}-unsigned.ipa" > "Andarium-ios${MIN_IOS}-unsigned.ipa.sha256"
+          cat "Andarium-ios${MIN_IOS}-unsigned.ipa.sha256"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Andarium-ios${{ env.MIN_IOS }}-unsigned
+          path: |
+            Andarium-ios*.ipa
+            Andarium-ios*.sha256
+          if-no-files-found: error
+
+      - name: Publish to Release draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euxo pipefail
+          gh release view andarium-ios26 -R "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
+            || gh release create andarium-ios26 -R "$GITHUB_REPOSITORY" \
+                 --title "Andarium for iOS 26 (min ${MIN_IOS}, no JIT)" \
+                 --notes "Recompiled from yitenchen123/Kernarium with IPHONEOS_DEPLOYMENT_TARGET=${MIN_IOS}. UNSIGNED IPA: sign with a paid Apple Developer account (needs increased-memory-limit + extended-virtual-addressing entitlements) before sideloading. Device verification pending." \
+                 --prerelease
+          gh release upload andarium-ios26 Andarium-ios*.ipa Andarium-ios*.sha256 --clobber -R "$GITHUB_REPOSITORY" || true
