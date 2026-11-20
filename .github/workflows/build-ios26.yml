@@ -49,16 +49,21 @@ jobs:
           ninja --version
           python3 --version
 
-      - name: Redirect unreachable GNU savannah sources to GitHub mirrors
+      - name: Patch unreachable GNU savannah manifest URLs to GitHub mirrors
         run: |
           set -euxo pipefail
-          # git.savannah.gnu.org 当前整体返回 502；改用精确含同一 commit 的 GitHub 镜像。
-          # insteadOf 只换传输地址，不改变 commit hash，manifest 完整性校验照常通过。
-          git config --global url."https://github.com/coreutils/gnulib.git".insteadOf "https://git.savannah.gnu.org/git/gnulib.git"
-          git config --global url."https://github.com/GitMirroring/libiconv.git".insteadOf "https://git.savannah.gnu.org/git/libiconv.git"
-          git config --global url."https://github.com/GitMirroring/gawk.git".insteadOf "https://git.savannah.gnu.org/git/gawk.git"
-          echo "=== insteadOf rules ==="
-          git config --global --get-regexp 'url\..*\.insteadof'
+          # git.savannah.gnu.org 当前整体 502。manifest 的 repository 列既是 clone 源，
+          # 又是 prepare.sh 校验 origin 的基准，改这里两处自动一致；commit hash 不变
+          # （已验证三个 GitHub 镜像精确含 manifest 指定的同一 commit），完整性校验照常通过。
+          F=dependencies/manifest.tsv
+          grep -q 'git.savannah.gnu.org/git/gnulib.git'  "$F"
+          grep -q 'git.savannah.gnu.org/git/libiconv.git' "$F"
+          grep -q 'git.savannah.gnu.org/git/gawk.git'    "$F"
+          sed -i '' 's|https://git.savannah.gnu.org/git/gnulib.git|https://github.com/coreutils/gnulib.git|' "$F"
+          sed -i '' 's|https://git.savannah.gnu.org/git/libiconv.git|https://github.com/GitMirroring/libiconv.git|' "$F"
+          sed -i '' 's|https://git.savannah.gnu.org/git/gawk.git|https://github.com/GitMirroring/gawk.git|' "$F"
+          echo "=== patched manifest rows ==="
+          grep -nE 'gnulib|libiconv|gawk' "$F"
 
       - name: Pin deployment target to ${{ env.MIN_IOS }} (assert)
         run: |
