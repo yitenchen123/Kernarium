@@ -46,11 +46,29 @@ jobs:
           xcrun --sdk iphoneos --show-sdk-version
           brew install ninja cmake meson pkg-config python@3.12 rsync autoconf automake libtool gperf bison flex 2>/dev/null || true
           # 一次性校验所有构建脚本依赖的工具，缺任一立即失败（避免逐个试错重跑）
-          for t in ninja cmake meson pkg-config python3 rsync autoreconf autoconf automake aclocal autopoint gperf bison flex clang clang++ gmake xcrun; do
-            command -v "$t" >/dev/null 2>&1 || { echo "MISSING TOOL: $t"; exit 1; }
-          done
-          command -v glibtoolize >/dev/null 2>&1 || command -v libtoolize >/dev/null 2>&1 || { echo "MISSING TOOL: glibtoolize/libtoolize"; exit 1; }
-          echo "all build tools present" 
+          # 每个工具给多个候选名（与脚本 find_tool 的多候选逻辑一致），命中任一即可
+          need() { local found=0 n; for n in "$@"; do command -v "$n" >/dev/null 2>&1 && { found=1; break; }; done; [ "$found" -eq 1 ] || { echo "MISSING TOOL (tried: $*)"; exit 1; }; }
+          need ninja
+          need cmake
+          need meson
+          need pkg-config
+          need python3 python
+          need rsync
+          need autoreconf
+          need autoconf
+          need automake
+          need aclocal
+          need autopoint
+          need gperf
+          need bison
+          need flex
+          need clang
+          need clang++
+          need make gmake
+          need glibtoolize libtoolize
+          need xcrun
+          need git
+          echo "all build tools present"  
           cmake --version | head -1
           ninja --version
           python3 --version
