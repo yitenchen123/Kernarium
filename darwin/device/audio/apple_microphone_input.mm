@@ -158,16 +158,28 @@ private:
             const std::weak_ptr<Capture> weak = weak_from_this();
             const auto tap = std::make_shared<MicrophoneTap>(converter, converted, *ring, channels,
                                                              protocol::sampleRate);
-            NSError* tapError = nil;
-            const BOOL tapped = [input
-                installTapOnBus:0
-                     bufferSize:static_cast<AVAudioFrameCount>(
-                                    inputFormat.sampleRate * tapSeconds)
-                         format:inputFormat
-                          error:&tapError
-                          block:^(AVAudioPCMBuffer* buffer, AVAudioTime* when) {
-                              tap->receive(buffer, when);
-                          }];
+            const auto tapBlock = ^(AVAudioPCMBuffer* buffer, AVAudioTime* when) {
+                tap->receive(buffer, when);
+            };
+            const AVAudioFrameCount tapFrames =
+                static_cast<AVAudioFrameCount>(inputFormat.sampleRate * tapSeconds);
+            BOOL tapped = NO;
+            if (@available(iOS 27.0, *)) {
+                NSError* tapError = nil;
+                tapped = [input
+                    installTapOnBus:0
+                         bufferSize:tapFrames
+                             format:inputFormat
+                              error:&tapError
+                              block:tapBlock];
+            } else {
+                // iOS 26 and earlier: the error-taking overload is unavailable.
+                [input installTapOnBus:0
+                            bufferSize:tapFrames
+                                format:inputFormat
+                                 block:tapBlock];
+                tapped = YES;
+            }
             if (!tapped) {
                 closeSession();
                 return false;
@@ -243,34 +255,56 @@ public:
          * session when the microphone stops), and the system's resumption
          * recommendation. An interruption is a deactivation that carries an
          * interruption context. */
-        deactivationObserver_ = [NSNotificationCenter.defaultCenter
-            addObserverForName:AVAudioSessionDidBecomeInactiveNotification
-                        object:[AVAudioSession sharedInstance]
-                         queue:nil
-                    usingBlock:^(NSNotification* notification) {
-                      const auto capture = weak.lock();
-                      if (!capture)
-                          return;
-                      const AVAudioSessionDeactivationContext* context =
-                          notification.userInfo
-                              [AVAudioSessionDeactivationContextKey];
-                      if (context.interruptionContext != nil)
-                          capture->interrupt();
-                    }];
-        resumptionObserver_ = [NSNotificationCenter.defaultCenter
-            addObserverForName:AVAudioSessionResumptionRecommendationNotification
-                        object:[AVAudioSession sharedInstance]
-                         queue:nil
-                    usingBlock:^(NSNotification* notification) {
-                      const auto capture = weak.lock();
-                      if (!capture)
-                          return;
-                      const AVAudioSessionResumptionContext* context =
-                          notification.userInfo
-                              [AVAudioSessionResumptionContextKey];
-                      capture->resume(context.recommendation ==
-                          AVAudioSessionResumptionRecommendationShouldResume);
-                    }];
+        if (@available(iOS 27.0, *)) {
+            deactivationObserver_ = [NSNotificationCenter.defaultCenter
+                addObserverForName:AVAudioSessionDidBecomeInactiveNotification
+                            object:[AVAudioSession sharedInstance]
+                             queue:nil
+                        usingBlock:^(NSNotification* notification) {
+                          const auto capture = weak.lock();
+                          if (!capture)
+                              return;
+                          const AVAudioSessionDeactivationContext* context =
+                              notification.userInfo
+                                  [AVAudioSessionDeactivationContextKey];
+                          if (context.interruptionContext != nil)
+                              capture->interrupt();
+                        }];
+            resumptionObserver_ = [NSNotificationCenter.defaultCenter
+                addObserverForName:AVAudioSessionResumptionRecommendationNotification
+                            object:[AVAudioSession sharedInstance]
+                             queue:nil
+                        usingBlock:^(NSNotification* notification) {
+                          const auto capture = weak.lock();
+                          if (!capture)
+                              return;
+                          const AVAudioSessionResumptionContext* context =
+                              notification.userInfo
+                                  [AVAudioSessionResumptionContextKey];
+                          capture->resume(context.recommendation ==
+                              AVAudioSessionResumptionRecommendationShouldResume);
+                        }];
+        } else {
+            // iOS 26 and earlier: map the legacy interruption notification
+            // onto the same interrupt()/resume() state machine.
+            deactivationObserver_ = [NSNotificationCenter.defaultCenter
+                addObserverForName:AVAudioSessionInterruptionNotification
+                            object:[AVAudioSession sharedInstance]
+                             queue:nil
+                        usingBlock:^(NSNotification* notification) {
+                          const auto capture = weak.lock();
+                          if (!capture)
+                              return;
+                          const NSNumber* type = notification.userInfo
+                              [AVAudioSessionInterruptionTypeKey];
+                          if (type == nil)
+                              return;
+                          if (type.unsignedIntegerValue == AVAudioSessionInterruptionTypeBegan)
+                              capture->interrupt();
+                          else if (type.unsignedIntegerValue == AVAudioSessionInterruptionTypeEnded)
+                              capture->resume(YES);
+                        }];
+        }
 #endif
     }
 
