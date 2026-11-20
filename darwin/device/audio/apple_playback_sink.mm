@@ -248,10 +248,21 @@ struct Output final {
     [output.engine attachNode:output.player];
     if (format != nil && outputRouteUp(output.engine)) {
         NSError* error = nil;
-        if ([output.engine connect:output.player
+        BOOL connected = NO;
+        if (@available(iOS 27.0, *)) {
+            connected = [output.engine connect:output.player
+                                            to:output.engine.mainMixerNode
+                                        format:format
+                                         error:&error];
+        } else {
+            // iOS 26: the error-taking overload is unavailable; the legacy
+            // connect:to:format: has no failure return.
+            [output.engine connect:output.player
                                 to:output.engine.mainMixerNode
-                            format:format
-                             error:&error]) {
+                            format:format];
+            connected = YES;
+        }
+        if (connected) {
             [output.engine prepare];
             output.connected = true;
         }
@@ -496,10 +507,19 @@ public:
             if (!health_.mustReplace(outputRouteUp(engine_))) {
                 [engine_ disconnectNodeOutput:player_];
                 NSError* connectError = nil;
-                if (![engine_ connect:player_
-                                   to:engine_.mainMixerNode
-                               format:format_
-                                error:&connectError]) {
+                BOOL connected = YES;
+                if (@available(iOS 27.0, *)) {
+                    connected = [engine_ connect:player_
+                                              to:engine_.mainMixerNode
+                                          format:format_
+                                           error:&connectError];
+                } else {
+                    // iOS 26: legacy connect:to:format: has no failure return.
+                    [engine_ connect:player_
+                                  to:engine_.mainMixerNode
+                              format:format_];
+                }
+                if (!connected) {
                     configured_ = false;
                     prepared_ = false;
                     running_ = false;
@@ -1069,7 +1089,11 @@ private:
                       // of after the player's own start-up.
                       if (running) {
                           AVAudioPlayerNode* const player = output.player;
-                          (void)[player playAndReturnError:&error];
+                          if (@available(iOS 27.0, *)) {
+                              (void)[player playAndReturnError:&error];
+                          } else {
+                              [player play];
+                          }
                           // The engine reports that it runs well before the
                           // audio hardware delivers its first cycle: a fifth
                           // of a second has been measured on the iPad mini
@@ -1153,7 +1177,12 @@ private:
             }
             measureOutputLatency();
             leaveMute();
-            playing = [player_ playAndReturnError:&error];
+            if (@available(iOS 27.0, *)) {
+                playing = [player_ playAndReturnError:&error];
+            } else {
+                [player_ play];
+                playing = YES;
+            }
         } @catch (NSException*) {
         }
         if (playing) {
@@ -1534,8 +1563,13 @@ private:
         @try {
             NSError* error = nil;
             measureOutputLatency();
-            if ([player_ playAndReturnError:&error])
+            if (@available(iOS 27.0, *)) {
+                if ([player_ playAndReturnError:&error])
+                    return OutputStart::running;
+            } else {
+                [player_ play];
                 return OutputStart::running;
+            }
         } @catch (NSException*) {
         }
         return OutputStart::failed;
