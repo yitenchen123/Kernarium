@@ -44,11 +44,12 @@ jobs:
           set -euxo pipefail
           xcodebuild -version
           xcrun --sdk iphoneos --show-sdk-version
-          brew install ninja cmake meson pkg-config python@3.12 rsync autoconf automake gperf bison flex 2>/dev/null || true
+          brew install ninja cmake meson pkg-config python@3.12 rsync autoconf automake libtool gperf bison flex 2>/dev/null || true
           # 一次性校验所有构建脚本依赖的工具，缺任一立即失败（避免逐个试错重跑）
-          for t in ninja cmake meson pkg-config python3 rsync autoreconf autoconf automake aclocal autopoint glibtoolize gperf bison flex clang clang++ gmake xcrun; do
+          for t in ninja cmake meson pkg-config python3 rsync autoreconf autoconf automake aclocal autopoint gperf bison flex clang clang++ gmake xcrun; do
             command -v "$t" >/dev/null 2>&1 || { echo "MISSING TOOL: $t"; exit 1; }
           done
+          command -v glibtoolize >/dev/null 2>&1 || command -v libtoolize >/dev/null 2>&1 || { echo "MISSING TOOL: glibtoolize/libtoolize"; exit 1; }
           echo "all build tools present" 
           cmake --version | head -1
           ninja --version
