@@ -62,7 +62,7 @@ jobs:
           # KosmicKrisp/Mesa 编译需要的 Python 模块
           python3 -m pip install --break-system-packages mako packaging pyyaml jinja2 2>/dev/null || \
             python3 -m pip install mako packaging pyyaml jinja2
-          python3 -c "import mako, packaging, yaml; print('python modules OK')
+          python3 -c "import mako, packaging, yaml; print('python modules OK')"
           # 一次性校验所有构建脚本依赖的工具，缺任一立即失败（避免逐个试错重跑）
           # 每个工具给多个候选名（与脚本 find_tool 的多候选逻辑一致），命中任一即可
           need() { local found=0 n; for n in "$@"; do command -v "$n" >/dev/null 2>&1 && { found=1; break; }; done; [ "$found" -eq 1 ] || { echo "MISSING TOOL (tried: $*)"; exit 1; }; }
