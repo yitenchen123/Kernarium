@@ -288,8 +288,19 @@ private final class CoreMotionDevice: MotionDevice, @unchecked Sendable {
             magnetometer: manager.isMagnetometerAvailable, deviceMotion: manager.isDeviceMotionAvailable,
             northFrame: { CMMotionManager.availableAttitudeReferenceFrames().contains(.xMagneticNorthZVertical) },
             authorization: {
-                if #available(iOS 27.2, *) { return CMMotionManager.authorizationStatus }
-                return nil
+                // CMMotionManager.authorizationStatus is an iOS 27.2 symbol.
+                // This build uses the Xcode 27.1 SDK, where that symbol does
+                // not exist at all, so an #available guard alone cannot satisfy
+                // the compiler ("has no member"). Resolve the class property
+                // at runtime instead: on 27.2+ devices the status is reported;
+                // on earlier systems it returns nil and assess() treats the
+                // permission as not stated (the pre-existing behaviour).
+                let sel = NSSelectorFromString("authorizationStatus")
+                guard CMMotionManager.responds(to: sel),
+                      let impl = CMMotionManager.method(for: sel) else { return nil }
+                typealias Getter = @convention(c) (AnyObject, Selector) -> Int
+                let getter = unsafeBitCast(impl, to: Getter.self)
+                return CMAuthorizationStatus(rawValue: getter(CMMotionManager.self, sel))
             })
         #if !APP_STORE
         // Once, so that a tester's log says whether this iOS states a motion
