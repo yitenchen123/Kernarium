@@ -155,10 +155,10 @@ jobs:
         run: |
           set -uxo pipefail
           # GNU savannah / git.savannah 偶发 502，最多重试 4 次
-          # 只准备本构建真正需要的 4 个产品；--product 每次只接受单个名字。
+          # 准备本构建需要的 6 个产品(含 package 阶段要用的 ios-storage/ios-compression)；--product 每次只接受单个名字。
           # 绝不能用 --product all：它包含 x86-conformance，其 x86-k-semantics 源
           # 有 169 组仅大小写不同的路径，macOS 大小写不敏感文件系统存不下会失败。
-          for PRODUCT in macos ios-network kernel-host-tools apple-gpu-vulkan-experiment; do
+          for PRODUCT in macos ios-network kernel-host-tools apple-gpu-vulkan-experiment ios-storage ios-compression; do
             echo "######## prepare product: $PRODUCT ########"
             ok=0
             for attempt in 1 2 3 4; do
