@@ -99,20 +99,26 @@ jobs:
         run: |
           set -uxo pipefail
           # GNU savannah / git.savannah 偶发 502，最多重试 4 次
-          for attempt in 1 2 3 4; do
-            echo "=== prepare attempt $attempt / 4 ==="
-            if dependencies/prepare.sh --product all 2>&1 | tee /tmp/prepare.log; then
-              echo "prepare OK on attempt $attempt"
-              exit 0
-            fi
-            rc=${PIPESTATUS[0]}
-            [ "$rc" -eq 0 ] && exit 0
-            echo "prepare failed (rc=$rc), retry in 15s..."
-            grep -nE "fatal:|502|503|error:" /tmp/prepare.log | tail -8 || true
-            sleep 15
+          # 只准备本构建真正需要的 4 个产品；--product 每次只接受单个名字。
+          # 绝不能用 --product all：它包含 x86-conformance，其 x86-k-semantics 源
+          # 有 169 组仅大小写不同的路径，macOS 大小写不敏感文件系统存不下会失败。
+          for PRODUCT in macos ios-network kernel-host-tools apple-gpu-vulkan-experiment; do
+            echo "######## prepare product: $PRODUCT ########"
+            ok=0
+            for attempt in 1 2 3 4; do
+              echo "=== prepare $PRODUCT attempt $attempt / 4 ==="
+              if dependencies/prepare.sh --product "$PRODUCT" 2>&1 | tee /tmp/prepare-$PRODUCT.log; then
+                ok=1; break
+              fi
+              rc=${PIPESTATUS[0]}
+              [ "$rc" -eq 0 ] && { ok=1; break; }
+              echo "prepare $PRODUCT failed (rc=$rc), retry in 15s..."
+              grep -nE "fatal:|502|503|error:|case-insensitive" /tmp/prepare-$PRODUCT.log | tail -8 || true
+              sleep 15
+            done
+            [ "$ok" -eq 1 ] || { echo "=== prepare FAILED for $PRODUCT ==="; exit 1; }
           done
-          echo "=== prepare FAILED after 4 attempts ==="
-          exit 1
+          echo "=== all required products prepared ==="
 
       - name: Build host (macOS arm64) static dependencies
         run: |
