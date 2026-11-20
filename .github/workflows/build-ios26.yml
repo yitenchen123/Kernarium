@@ -44,7 +44,9 @@ jobs:
           set -euxo pipefail
           xcodebuild -version
           xcrun --sdk iphoneos --show-sdk-version
-          brew install ninja cmake python@3.12 2>/dev/null || true
+          brew install ninja cmake meson pkg-config python@3.12 2>/dev/null || true
+          # 校验必需工具
+          for t in ninja cmake meson pkg-config python3; do command -v "$t" || { echo "MISSING TOOL: $t"; exit 1; }; done
           cmake --version | head -1
           ninja --version
           python3 --version
