@@ -81,8 +81,22 @@ jobs:
 
       - name: Prepare dependency sources (network)
         run: |
-          set -euxo pipefail
-          dependencies/prepare.sh --product all
+          set -uxo pipefail
+          # GNU savannah / git.savannah 偶发 502，最多重试 4 次
+          for attempt in 1 2 3 4; do
+            echo "=== prepare attempt $attempt / 4 ==="
+            if dependencies/prepare.sh --product all 2>&1 | tee /tmp/prepare.log; then
+              echo "prepare OK on attempt $attempt"
+              exit 0
+            fi
+            rc=${PIPESTATUS[0]}
+            [ "$rc" -eq 0 ] && exit 0
+            echo "prepare failed (rc=$rc), retry in 15s..."
+            grep -nE "fatal:|502|503|error:" /tmp/prepare.log | tail -8 || true
+            sleep 15
+          done
+          echo "=== prepare FAILED after 4 attempts ==="
+          exit 1
 
       - name: Build host (macOS arm64) static dependencies
         run: |
