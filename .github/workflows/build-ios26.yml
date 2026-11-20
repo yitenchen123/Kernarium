@@ -27,7 +27,7 @@ permissions:
 
 jobs:
   build:
-    runs-on: macos-27   # macOS 27.0.1 + Xcode 27.2，能读工程 JSON (project.xcproj)
+    runs-on: xcode-27   # 官方唯一带 Xcode 27 的标签（macos-27 不存在！）
     timeout-minutes: 360
     env:
       MIN_IOS: ${{ github.event.inputs.min_ios || '26.0' }}
