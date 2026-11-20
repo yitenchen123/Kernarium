@@ -117,14 +117,27 @@ struct SystemBackgroundJobScheduler: BackgroundJobScheduling {
             subtitle: subtitle
         )
         request.strategy = .fail
-        // iOS 27 submits off the calling thread and reports later, possibly
-        // after it has already started the task.
+        // The request must be submitted off the main actor. iOS 27 added an
+        // asynchronous variant that reports back later; iOS 26 only has the
+        // synchronous throwing submit(_:).
         nonisolated(unsafe) let handed = request
         DispatchQueue.global(qos: .userInitiated).async {
-            BGTaskScheduler.shared.submitTaskRequest(handed) { error in
-                guard let error else { return }
-                DispatchQueue.main.async {
-                    MainActor.assumeIsolated { refused(error) }
+            if #available(iOS 27.0, *) {
+                BGTaskScheduler.shared.submitTaskRequest(handed) { error in
+                    guard let error else { return }
+                    DispatchQueue.main.async {
+                        MainActor.assumeIsolated { refused(error) }
+                    }
+                }
+            } else {
+                // iOS 26: BGContinuedProcessingTask + submit(_:) are available;
+                // only the completion-handler variant is new in 27.
+                do {
+                    try BGTaskScheduler.shared.submit(handed)
+                } catch {
+                    DispatchQueue.main.async {
+                        MainActor.assumeIsolated { refused(error) }
+                    }
                 }
             }
         }
